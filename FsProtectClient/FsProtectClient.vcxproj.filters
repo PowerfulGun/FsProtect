@@ -15,9 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="ReadMe.txt" />
-  </ItemGroup>
-  <ItemGroup>
     <ClInclude Include="Resource.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -39,5 +36,8 @@
     <Image Include="Icon.ico">
       <Filter>资源文件</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="ReadMe.md" />
   </ItemGroup>
 </Project>

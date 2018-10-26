@@ -1,5 +1,3 @@
-// FsProtectClient.cpp : 定义应用程序的入口点。
-//
 #include	<Windows.h>
 #include "resource.h"
 #include "FsProtectClient.h"
