@@ -15,7 +15,7 @@ LIST_ENTRY	g_VirusListHead;	//病毒链表头
 HANDLE	g_hRegistrySub = NULL;	//注册表句柄
 FILTER_CONTROL	g_Control = { TRUE ,TRUE,TRUE};	//全局驱动过滤控制器
 
-//本地病毒库
+//默认的本地病毒库,这些内容会被添加到注册表中,之后病毒库的添加/删除都会在注册表中进行
 VIRUS	LocalVirus[] =
 {
 	//L"mspaint",
