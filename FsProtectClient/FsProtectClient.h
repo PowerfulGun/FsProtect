@@ -1,0 +1,51 @@
+
+/**********应用程序和驱动通信相关的宏定义*************/
+//获得应用程序发来的等待事件
+#define	IOCTL_UserEvent \
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x201,METHOD_NEITHER,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//分配共享缓冲区给应用程序来通信
+#define	IOCTL_GetShareMemory \
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x202,METHOD_BUFFERED,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//通知驱动标记病毒
+#define	IOCTL_VirusSet	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x203,METHOD_BUFFERED,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//通知驱动取消标记病毒
+#define	IOCTL_VirusUnset	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x205,METHOD_BUFFERED,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//将病毒链表中已录入的病毒信息拷贝到日志缓冲区输出
+#define	IOCTL_VirusShow	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x204,METHOD_NEITHER,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//通知驱动是否过滤读请求
+#define	IOCTL_ReadControl	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x206,METHOD_BUFFERED,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//通知驱动是否过滤写请求	
+#define	IOCTL_WriteControl	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x207,METHOD_BUFFERED,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//通知驱动是否过滤设置文件的请求
+#define	IOCTL_SetFileControl	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x208,METHOD_BUFFERED,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+//显示驱动全局过滤器
+#define	IOCTL_ShowControl	\
+CTL_CODE(FILE_DEVICE_UNKNOWN,0x209,METHOD_NEITHER,FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+/******************************************************/
+
+
+typedef	struct _ClientLog
+{
+	ULONG	CharCounts;	//单条日志的字符个数
+	WCHAR	LogBuffer[];//缓冲区
+}CLIENT_LOG , *PCLIENT_LOG;
+
+typedef	struct _Log
+{
+	ULONG	CharCounts;	//日志中字符个数
+	WCHAR	Buffer[2048];//日志缓冲区
+}LOG , *PLOG;

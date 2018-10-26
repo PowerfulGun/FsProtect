@@ -1,0 +1,86 @@
+;
+; FsProtect.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Sample ; TODO: edit Class
+ClassGuid={78A1C341-4539-11d3-B88D-00C04FAD5171} ; TODO: edit ClassGuid
+Provider=%ManufacturerName%
+CatalogFile=FsProtect.cat
+DriverVer= ; TODO: set DriverVer in stampinf property pages
+
+[DestinationDirs]
+DefaultDestDir = 12
+FsProtect_Device_CoInstaller_CopyFiles = 11
+
+; ================= Class section =====================
+
+[ClassInstall32]
+Addreg=SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+FsProtect.sys  = 1,,
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1 ; make sure the number matches with SourceDisksNames
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%FsProtect.DeviceDesc%=FsProtect_Device, Root\FsProtect ; TODO: edit hw-id
+
+[FsProtect_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+FsProtect.sys
+
+;-------------- Service installation
+[FsProtect_Device.NT.Services]
+AddService = FsProtect,%SPSVCINST_ASSOCSERVICE%, FsProtect_Service_Inst
+
+; -------------- FsProtect driver install sections
+[FsProtect_Service_Inst]
+DisplayName    = %FsProtect.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\FsProtect.sys
+
+;
+;--- FsProtect_Device Coinstaller installation ------
+;
+
+[FsProtect_Device.NT.CoInstallers]
+AddReg=FsProtect_Device_CoInstaller_AddReg
+CopyFiles=FsProtect_Device_CoInstaller_CopyFiles
+
+[FsProtect_Device_CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[FsProtect_Device_CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[FsProtect_Device.NT.Wdf]
+KmdfService =  FsProtect, FsProtect_wdfsect
+[FsProtect_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+ClassName="Samples" ; TODO: edit ClassName
+DiskName = "FsProtect Installation Disk"
+FsProtect.DeviceDesc = "FsProtect Device"
+FsProtect.SVCDESC = "FsProtect Service"
