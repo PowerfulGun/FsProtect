@@ -9,24 +9,25 @@
 PDEVICE_OBJECT	g_pFsFilterControlDeviceObject = NULL;	//本过滤驱动使用的控制设备
 PDRIVER_OBJECT	g_pFsFilterDriverObject = NULL;	//本过滤驱动对象
 FAST_MUTEX	g_FastMutexAttach;
-FILEOBJCONTEXT	g_LastFileContext;	//用来保存之前的文件对象信息
+FILEOBJCONTEXT	g_LastFileContext;	//用来保存最近一次的文件对象信息
 PVOID	g_pSkipFileObjectContext;	//用来保存需要跳过检查的文件对象
 LIST_ENTRY	g_VirusListHead;	//病毒链表头
 HANDLE	g_hRegistrySub = NULL;	//注册表句柄
 FILTER_CONTROL	g_Control = { TRUE ,TRUE,TRUE};	//全局驱动过滤控制器
+ULONG	g_ProcessNameOffset = 0;
 
 //默认的本地病毒库,这些内容会被添加到注册表中,之后病毒库的添加/删除都会在注册表中进行
-VIRUS	LocalVirus[] =
+VIRUS_INFOR	LocalVirus[] =
 {
 	//L"mspaint",
 	//L"mspaint.exe",
 	//L"mspaint.exe",
 	//0x0,0xffc85d29 ,0xa5acf974 ,0x808080,	//mspaint的特征码
 
-	//L"notepad",
-	//L"notepad.exe",
-	//L"notepad.exe",
-	//0x103,0x577e,0x553b12,0xf43ddac7,	//notepad的特征码
+	L"机房220",
+	L"global.exe",
+	L"global.exe",
+	0x747069,0x42c0da30,0x186d262d,0x4889ffff,	//特征码
 
 	L"机房481",								//机房481病毒,该病毒会将U盘文件夹隐藏,并生成同名exe程序冒充文件夹(图标是xp系统文件夹的图标)
 	L"explorer.exe",						//该病毒使用自己的进程explorer.exe,冒充windows的同名资源管理器进程(Windows自己的explorer.exe较大)
@@ -41,9 +42,14 @@ VIRUS	LocalVirus[] =
 	0,0,0,0,0,0,0	//代表末尾,遍历到这里就退出
 };
 
+
+
 /*
-驱动入口
-第一步是生成自己使用的控制设备CDO，用来和应用程序通信
+驱动入口实现工作
+1.初始化病毒链表保存已知病毒的特征数据
+2.生成自己使用的控制设备CDO，用来和应用程序通信
+3.设置驱动的分发函数
+4.注册文件系统激活回调
 */
 NTSTATUS	DriverEntry(
 	IN	PDRIVER_OBJECT	_pDriverObject ,
@@ -113,6 +119,11 @@ NTSTATUS	DriverEntry(
 	if (!NT_SUCCESS( status ))//如果不成功就没有必要执行之后的文件系统绑定操作了
 		return	status;
 
+	/*
+	//获得进程名在进程结构体中的偏移
+	//_GetProcessNameOffset();
+	*/
+
 	do
 	{
 		//定义自己的控制设备名
@@ -128,15 +139,17 @@ NTSTATUS	DriverEntry(
 			&g_pFsFilterControlDeviceObject );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("FsFilter.DriverEntry: error create CDO:%wZ, status = %x\n" , &DeviceName , status) );
-
+			KdPrint( ("FsProtect.DriverEntry: error create CDO:%wZ, status = %x\n" , 
+				&DeviceName , status) );
 			break;
 		}
-		//初始化设备扩展
+
+		//清空设备扩展
 		RtlZeroMemory(
 			g_pFsFilterControlDeviceObject->DeviceExtension ,
 			sizeof( CONTROL_DEVICE_EXTENSION ) );
 
+		//设置设备为缓冲IO方式
 		g_pFsFilterControlDeviceObject->Flags |= DO_BUFFERED_IO;
 
 		//创建符号链接名
@@ -149,7 +162,7 @@ NTSTATUS	DriverEntry(
 			&DeviceName );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("FsFilter.DriverEntry:error create SymbolicLink\n\
+			KdPrint( ("FsProtect.DriverEntry:error create SymbolicLink\n\
 				status=%x\n" , status) );
 			break;
 		}
@@ -157,7 +170,7 @@ NTSTATUS	DriverEntry(
 		//设置默认分发函数
 		for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
 		{
-			_pDriverObject->MajorFunction[i] = _FsFilterDefaultDispatch;
+			_pDriverObject->MajorFunction[i] = _FsProtectDefaultDispatch;
 		}
 
 		//设置特殊的分发函数
@@ -222,7 +235,7 @@ NTSTATUS	DriverEntry(
 		status = IoRegisterFsRegistrationChange( _pDriverObject , _FsChangeCallback );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("FsFilter.DriverEntry.IoRegisterFsRegistrationChange fail\n status=%x\n" , status) );
+			KdPrint( ("FsProtect.DriverEntry.IoRegisterFsRegistrationChange fail\n status=%x\n" , status) );
 			break;
 		}
 
@@ -250,10 +263,11 @@ NTSTATUS	DriverEntry(
 	return	STATUS_SUCCESS;
 }
 
+
 /*
-_FsFilterDefaultDispatch负责不需要处理，直接下发到下层驱动的irp
+_FsProtectDefaultDispatch负责不需要处理，直接下发到下层驱动的irp
 */
-NTSTATUS	_FsFilterDefaultDispatch(
+NTSTATUS	_FsProtectDefaultDispatch(
 	IN	PDEVICE_OBJECT	_pDeviceObject ,
 	IN	PIRP	_pIrp
 )
@@ -3510,7 +3524,7 @@ NTSTATUS	_FsFilterDisplayFileName(
 				{
 					KdPrint( ("%S\tFileObject->FileName:%wZ\n" ,
 						_pFirstDisplayStr , &pFileObject->FileName) );
-
+					/*
 					//输出日志
 					if (((PCONTROL_DEVICE_EXTENSION)
 						(g_pFsFilterControlDeviceObject->DeviceExtension))->pClientLog)
@@ -3529,7 +3543,7 @@ NTSTATUS	_FsFilterDisplayFileName(
 							(g_pFsFilterControlDeviceObject->DeviceExtension))->pUserEvent ,
 							IO_NO_INCREMENT ,
 							FALSE );
-					}
+					}*/
 				}
 			} // end for
 			ExFreePool( pNameBuffer );
@@ -3622,7 +3636,7 @@ NTSTATUS	_FsFilterReadDispatch(
 
 	do
 	{
-	//如果是自己的控制设备收到的
+		//如果是自己的控制设备收到的
 		if (IS_MY_CONTROL_DEVICE_OBJECT( _pDeviceObject ))
 		{
 			//返回不支持
@@ -3632,11 +3646,18 @@ NTSTATUS	_FsFilterReadDispatch(
 			return	STATUS_NOT_SUPPORTED;
 		}
 
+		//如果是文件系统控制设备的IRP请求就直接放行
+		if (pDevExt->pStorageStackDeviceObject == NULL)
+		{
+			return	IoCallDriver(
+				pDevExt->pLowerFsDeviceObject , IO_NO_INCREMENT );
+		}
+
 		//先查看控制器中读请求是否要过滤
 		if (g_Control.ReadControl == FALSE)
 			break;
 
-		//判断目标文件是否是exe文件并输出符合特定后缀的文件名
+		//判断目标文件是否是可执行文件并输出符合特定后缀的文件名
 		status = _FsFilterDisplayFileName(
 			_pIrp ,
 			L"[IRP_MJ_READ]\n" ,
@@ -3661,26 +3682,60 @@ NTSTATUS	_FsFilterReadDispatch(
 				_pDeviceObject ,
 				&bIsVirus );
 			if (NT_SUCCESS( status ) && bIsVirus == TRUE)
-			{
-				//是病毒,删除目标病毒文件
-				FILE_DISPOSITION_INFORMATION	FileDispositionInfor;
-				FileDispositionInfor.DeleteFile = TRUE;
+			{	
+				/*
+				//是病毒文件
+				//有些病毒自身是只读和隐藏属性,先将这些属性去掉再删除
+				//FILE_BASIC_INFORMATION	FileBasicInfor = { 0 };
+				//FileBasicInfor.FileAttributes = FILE_ATTRIBUTE_NORMAL;
 
-				status = _IrpSetFileInformation(
-					pFileObject->Vpb->DeviceObject ,
-					pFileObject ,
-					FileDispositionInformation ,
-					&FileDispositionInfor ,
-					sizeof( FILE_DISPOSITION_INFORMATION ) );
+				//status = _IrpSetFileInformation(
+				//	pFileObject->Vpb->DeviceObject ,
+				//	pFileObject ,
+				//	FileBasicInformation ,
+				//	&FileBasicInfor ,
+				//	sizeof( FILE_BASIC_INFORMATION ) );
+				//if (!NT_SUCCESS( status ))
+				//{
+				//	KdPrint( ("_FsFilterReadDispatch.\n\
+				//	_IrpSetFileInformation: Fail to set virus attributes normal! status=%x\n",
+				//		status) );
+				//}
+
+				////清除目标缓存
+				//if (!CcPurgeCacheSection(
+				//	pFileObject->SectionObjectPointer ,
+				//	NULL , 0 , TRUE ))
+				//{
+				//	KdPrint( ("_FsFilterReadDispatch: Fail to clear file cache!\n") );
+				//}
+
+				////删除目标病毒文件
+				//FILE_DISPOSITION_INFORMATION	FileDispositionInfor;
+				//FileDispositionInfor.DeleteFile = TRUE;
+
+				//status = _IrpSetFileInformation(
+				//	pFileObject->Vpb->DeviceObject ,
+				//	pFileObject ,
+				//	FileDispositionInformation ,
+				//	&FileDispositionInfor ,
+				//	sizeof( FILE_DISPOSITION_INFORMATION ) );
+				*/
+
+
+				//删除病毒文件
+				status = _DeleteVirusFile( pFileObject );
 				if (!NT_SUCCESS( status ))
 				{
-					KdPrint( ("_CheckVirusFile.\n\
-							\t_IrpSetFileInformation fail,status=%x\n" , status) );
+					KdPrint( ("_FsFilterReadDispatch.\n\
+							_DeleteVirusFile: Fail to delete virus,status=%x\n" , status) );
 				}
-
-				KdPrint( ("###################\n\
+				else
+				{
+					KdPrint( ("###################\n\
 							Delete it !\n\
 							####################\n") );
+				}
 
 				KdPrint( ("##################\n\
 						 \tNo read it !\n\
@@ -3730,6 +3785,7 @@ hFile相关的文件句柄
 pFileObject相关的文件对象
 pDeviceObject过滤设备对象
 pbIsVirus用来返回是否是病毒
+返回值：操作状态
 */
 NTSTATUS	_CheckVirusFile(
 	IN OPTIONAL	HANDLE	_hFile,
@@ -3744,7 +3800,11 @@ NTSTATUS	_CheckVirusFile(
 	ULONG	FileData[4];
 
 	do
-	{	//判断当前文件对象是否已经检查过
+	{	
+		//保存最近一次操作的文件对象
+		g_LastFileContext.pFileObject = _pFileObject;
+
+		//判断当前文件对象是否已经检查过
 		if (g_LastFileContext.pFsContext == _pFileObject->FsContext)
 		{
 			KdPrint( ("This File had read\n") );
@@ -3754,8 +3814,8 @@ NTSTATUS	_CheckVirusFile(
 		else
 		{
 			KdPrint( ("Find an new File,start read file data.\n") );
+			//保存最近一次操作的文件控制块
 			g_LastFileContext.pFsContext = _pFileObject->FsContext;
-
 		}
 
 		//获取文件特征码
@@ -3770,6 +3830,7 @@ NTSTATUS	_CheckVirusFile(
 			KdPrint( ("_CheckVirusFile._FsFilterGetFileData fail,\
 				status=%x\n" , status) );
 			g_LastFileContext.pFsContext = NULL;
+			g_LastFileContext.pFileObject = NULL;
 
 			break;
 		}
@@ -4286,18 +4347,17 @@ NTSTATUS	_FsFilterSetInformationDispatch(
 				//检查当前进程是否合法,不合法直接擦除
 				pKProcess = PsGetCurrentProcess();
 				pKThread = PsGetCurrentThread();
-				status = _CheckVirusThread( 
+				status = _CheckProcessOrThread(
 					_pDeviceObject ,
-					pKThread,
-					pKProcess , 
+					pKThread ,
+					pKProcess ,
 					&bIsVirus ,
-					&pThreadStartAddress,
-					&ThreadModuleCodeSize);
+					&pThreadStartAddress ,
+					&ThreadModuleCodeSize );
 				if (NT_SUCCESS( status ) && bIsVirus==TRUE)
 				{
 					KdPrint( ("########################\n\
 								Find Virus Thread !\n\
-									Kill it !\n\
 							#######################\n") );
 					//输出日志
 					if (((PCONTROL_DEVICE_EXTENSION)
@@ -4324,17 +4384,85 @@ NTSTATUS	_FsFilterSetInformationDispatch(
 					if (!NT_SUCCESS( status ))
 					{
 						KdPrint( ("_FsFilterSetInformationDispatch.\n\
-									\t_KillProcess fail,status=%x\n" , status) );
+									\t_KillThread fail,status=%x\n" , status) );
+						KdPrint( ("########################\n\
+								Fail to kill it !\n\
+							#######################\n") );
 					}
-
+					else
+					{
+						KdPrint( ("########################\n\
+								Kill It !\n\
+							#######################\n") );
+					}
 					//是病毒进程的请求,直接结束请求不给文件系统处理
 					status = STATUS_FILE_CLOSED;
 					_pIrp->IoStatus.Status = status;
 					_pIrp->IoStatus.Information = 0;
 					IoCompleteRequest( _pIrp , IO_NO_INCREMENT );
 					return	status;
-				}
-			}
+				}//if (NT_SUCCESS( status ) && bIsVirus==TRUE)
+				else if (status == STATUS_OBJECT_PATH_SYNTAX_BAD)
+				{
+					//检查线程失败就换成检查进程
+					status = _CheckProcessOrThread(
+						_pDeviceObject ,
+						NULL ,
+						pKProcess ,
+						&bIsVirus ,
+						NULL ,
+						NULL );
+					if (!NT_SUCCESS( status ))
+					{	
+						KdPrint( ("_FsFilterSetInformationDispatch.\n\
+						_CheckProcessOrThread: Fail to Check process,status=%x\n" ,
+							status) );
+						if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+						{	//这种情况直接标记为病毒进程
+							KdPrint( ("Marking this fucking process as virus!\n") );
+							bIsVirus = TRUE;
+						}
+						else {
+							ASSERT( FALSE );
+						}
+					}
+					
+					if (bIsVirus == TRUE)
+					{
+						KdPrint( ("########################\n\
+								Find Virus Process !\n\
+							#######################\n") );
+
+						//杀死病毒进程
+						status = _KillProcess( pKProcess );
+						if (!NT_SUCCESS( status ))
+						{
+							KdPrint( ("_FsFilterSetInformationDispatch.\n\
+							_KillProcess failed,status=%x\n" , status) );
+							KdPrint( ("########################\n\
+								Fail to kill it !\n\
+							#######################\n") );
+						}
+						else
+						{
+							KdPrint( ("########################\n\
+								Kill it !\n\
+							#######################\n") );
+						}
+
+						//是病毒进程的请求,直接结束请求不给文件系统处理
+						status = STATUS_FILE_CLOSED;
+						_pIrp->IoStatus.Status = status;
+						_pIrp->IoStatus.Information = 0;
+						IoCompleteRequest( _pIrp , IO_NO_INCREMENT );
+						return	status;
+
+					}//end if (bIsVirus == TRUE)
+					
+				}// end if (NT_SUCCESS( status ) && bIsVirus==TRUE)
+
+			}// if set file hidden
+
 		} // if (pIrpStack->Parameters.SetFile.FileInformationClass == FileBasicInformation)
 
 	} while (FALSE);
@@ -4347,74 +4475,70 @@ NTSTATUS	_FsFilterSetInformationDispatch(
 		_pIrp );
 }
 
-//
-///*
-//该函数获得进程名在EPROCESS中的偏移
-//*/
-//VOID	_GetProcessNameOffset()
-//{
-//	ULONG	i;
-//	PEPROCESS	pCurrentProcess;
-//
-//	//函数会在System进程中运行,得到进程的结构体
-//	pCurrentProcess = PsGetCurrentProcess();
-//
-//	//搜索字符串"System",并记录偏移
-//	for (i = 0; i < 3 * 4 * 1024; i++)
-//	{
-//		if (!strncmp( "System" , (PCHAR)pCurrentProcess + i , strlen( "System" ) ))
-//		{
-//			g_ProcessNameOffset = i;
-//			break;
-//		}
-//	}
-//}
 
-//
-//
+/*
+该函数获得进程名在EPROCESS中的偏移
+*/
+VOID	_GetProcessNameOffset()
+{
+	ULONG	i;
+	PEPROCESS	pCurrentProcess;
+
+	//函数会在System进程中运行,得到进程的结构体
+	pCurrentProcess = PsGetCurrentProcess();
+
+	//搜索字符串"System",并记录偏移
+	for (i = 0; i < 3 * 4 * 1024; i++)
+	{
+		if (!strncmp( "System" , (PCHAR)pCurrentProcess + i , strlen( "System" ) ))
+		{
+			g_ProcessNameOffset = i;
+			break;
+		}
+	}
+}
+
+
 //该函数通过偏移获得进程名
 //参数:
 //pProcessName用来返回进程名
 //pRetLength用来返回需要的缓冲区大小
-//*/
-//NTSTATUS	_GetCurrentProcessName(
-//	IN OUT	PUNICODE_STRING	_pProcessName ,
-//	OUT	OPTIONAL PULONG	_pRetLength
-//)
-//{
-//	PEPROCESS	PCurrentProcess;
-//	ULONG	NeedLength;
-//	ANSI_STRING	AnsiName;
-//
-//	if (g_ProcessNameOffset == 0)
-//		return	STATUS_UNSUCCESSFUL;
-//
-//	//获得当前进程结构体
-//	PCurrentProcess = PsGetCurrentProcess();
-//
-//	//从结构体中获取进程名
-//	RtlInitAnsiString(
-//		&AnsiName ,
-//		(PCHAR)PCurrentProcess + g_ProcessNameOffset );
-//
-//	//计算从ANSI转换成UNICODE需要的大小
-//	NeedLength = RtlAnsiStringToUnicodeSize( &AnsiName );
-//	//判断输出缓冲区空间是否足够容纳
-//	if (NeedLength > _pProcessName->MaximumLength)
-//	{
-//		//不够就返回所需要的字节数
-//		if (_pRetLength != NULL)
-//			*_pRetLength = NeedLength;
-//		return	STATUS_BUFFER_TOO_SMALL;
-//	}
-//
-//	//转换成UNICODE
-//	RtlAnsiStringToUnicodeString(
-//		_pProcessName ,
-//		&AnsiName ,
-//		FALSE );
-//	return	STATUS_SUCCESS;
-//}
+NTSTATUS	_GetProcessName(
+	IN	PKPROCESS	_pKprocess,
+	IN OUT	PUNICODE_STRING	_pProcessName ,
+	OUT	OPTIONAL PULONG	_pRetLength
+)
+{
+	ULONG	NeedLength;
+	ANSI_STRING	AnsiName;
+
+	if (g_ProcessNameOffset == 0)
+		return	STATUS_UNSUCCESSFUL;
+
+
+	//从结构体中获取进程名
+	RtlInitAnsiString(
+		&AnsiName ,
+		(PCHAR)_pKprocess + g_ProcessNameOffset );
+
+	//计算从ANSI转换成UNICODE需要的大小
+	NeedLength = RtlAnsiStringToUnicodeSize( &AnsiName );
+	//判断输出缓冲区空间是否足够容纳
+	if (NeedLength > _pProcessName->MaximumLength)
+	{
+		//不够就返回所需要的字节数
+		if (_pRetLength != NULL)
+			*_pRetLength = NeedLength;
+		return	STATUS_BUFFER_TOO_SMALL;
+	}
+
+	//转换成UNICODE
+	RtlAnsiStringToUnicodeString(
+		_pProcessName ,
+		&AnsiName ,
+		FALSE );
+	return	STATUS_SUCCESS;
+}
 
 
 /*
@@ -4428,9 +4552,9 @@ pbIsVirus用来返回是否是病毒进程
 pThreadStartAddress用来回传线程的代码页起始地址
 pThreadModulePageSize用来回传线程依赖的模块的页大小
 */
-NTSTATUS	_CheckVirusThread(
+NTSTATUS	_CheckProcessOrThread(
 	IN	PDEVICE_OBJECT	_pDeviceObject,
-	IN	PKTHREAD	_pKThread,
+	IN	OPTIONAL	PKTHREAD	_pKThread,
 	IN	PKPROCESS	_pKProcess,
 	OUT	PBOOLEAN	_pbIsVirus,
 	OUT OPTIONAL	PVOID*	_pThreadStartAddress,
@@ -4440,6 +4564,8 @@ NTSTATUS	_CheckVirusThread(
 	ULONG	RetLength;
 	NTSTATUS	status = STATUS_SUCCESS;
 	UNICODE_STRING	ThreadModuleName = { 0 };
+	UNICODE_STRING	ProcessImageNtName = { 0 };
+	UNICODE_STRING	ProcessImageWin32Name = { 0 };
 	HANDLE	hImageFile = NULL;
 	OBJECT_ATTRIBUTES	ObjAttr;
 	IO_STATUS_BLOCK	iosb;
@@ -4447,119 +4573,273 @@ NTSTATUS	_CheckVirusThread(
 
 	do
 	{
-	//第一次调用为了获得缓冲区大小
-		status = _GetThreadModulePath(
-			_pKThread,
-			_pKProcess ,
-			&ThreadModuleName ,
-			&RetLength ,
-			NULL,NULL);
-		if (!NT_SUCCESS( status ))
+		if (_pKThread == NULL)
 		{
+			//如果只指定了Kprocess没有指定Kthread
+			//那就只检查进程
+			//第一次调用为了获得缓冲区大小
+			status = _GetProcessImageName(
+				_pKProcess ,
+				&ProcessImageNtName ,
+				&RetLength );
 			if (status == STATUS_BUFFER_TOO_SMALL)
 			{
-				ThreadModuleName.Buffer =
-					ExAllocatePoolWithTag( NonPagedPool , RetLength , POOL_TAG );
-				if (ThreadModuleName.Buffer == NULL)
+				ProcessImageNtName.Buffer =
+					ExAllocatePoolWithTag( NonPagedPool ,
+					RetLength , POOL_TAG );
+				if (ProcessImageNtName.Buffer == NULL)
 				{
-					KdPrint( ("_CheckProcess.\n\
-				\tExAllocateImageName fail\n") );
-
-					return STATUS_INSUFFICIENT_RESOURCES;
+					KdPrint( ("_CheckProcessOrThread:\
+					Fail to allocate ProcessImageNtName.Buffer!\n") );
+					status = STATUS_INSUFFICIENT_RESOURCES;
+					return	status;
 				}
-				ThreadModuleName.MaximumLength = RetLength;
+				ProcessImageNtName.MaximumLength = (USHORT)RetLength;
 			}
 			else
 			{
-				KdPrint( ("_CheckProcess.\n\
-			\t_GetThreadModulePath fail,status" , status) );
-
+				KdPrint( ("_CheckProcessOrThread.\n\
+				_GetProcessImageName fail,status=%x\n" , status) );
 				return	status;
 			}
-		} // if(!NT_SUCCESS(status))
-		
-		//第二次调用真正获得字符串
-		status = _GetThreadModulePath(
-			_pKThread,
-			_pKProcess ,
-			&ThreadModuleName ,
-			&RetLength ,
-			_pThreadStartAddress,
-			_pThreadModulePageSize);
-		if (!NT_SUCCESS( status ))
+
+			//第二次调用真正获得字符串
+			status = _GetProcessImageName(
+				_pKProcess ,
+				&ProcessImageNtName ,
+				&RetLength );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+						\t_GetProcessImageName fail,status=%x\n" , status) );
+				break;
+			}
+
+			KdPrint( ("ProcessImageNtName:%wZ\n" , &ProcessImageNtName) );
+		}// if (_pKThread == NULL)
+		else
 		{
-			KdPrint( ("_CheckVirusProcess.\n\
-						\t_GetThreadModulePath fail,status=%x\n" , status) );
-			break;
-		}
+		//第一次调用为了获得缓冲区大小
+			status = _GetThreadModuleInfor(
+				_pKThread ,
+				_pKProcess ,
+				&ThreadModuleName ,
+				&RetLength ,
+				NULL , NULL );
+			if (!NT_SUCCESS( status ))
+			{
+				if (status == STATUS_BUFFER_TOO_SMALL)
+				{
+					ThreadModuleName.Buffer =
+						ExAllocatePoolWithTag( NonPagedPool , RetLength , POOL_TAG );
+					if (ThreadModuleName.Buffer == NULL)
+					{
+						KdPrint( ("_CheckProcessOrThread.\n\
+				\tExAllocateImageName fail\n") );
 
-		//打印线程模块名
-		KdPrint( ("ThreadModulePath:%wZ\n" , &ThreadModuleName) );
-		////输出日志
-		//if (((PCONTROL_DEVICE_EXTENSION)
-		//	(g_pFsFilterControlDeviceObject->DeviceExtension))->pClientLog)
-		//{
-		//	((PCONTROL_DEVICE_EXTENSION)
-		//		(g_pFsFilterControlDeviceObject->DeviceExtension))->
-		//		pClientLog->
-		//		CharCounts =
-		//		swprintf(
-		//		((PCONTROL_DEVICE_EXTENSION)
-		//		(g_pFsFilterControlDeviceObject->DeviceExtension))->pClientLog->LogBuffer ,
-		//		L"ThreadModulePath:%wZ\r\n" , &ThreadModuleName );
+						return STATUS_INSUFFICIENT_RESOURCES;
+					}
+					ThreadModuleName.MaximumLength = (USHORT)RetLength;
+				}
+				else
+				{
+					KdPrint( ("_CheckProcessOrThread.\n\
+			\t_GetThreadModuleInfor fail,status" , status) );
 
-		//	KeSetEvent(
-		//		((PCONTROL_DEVICE_EXTENSION)
-		//		(g_pFsFilterControlDeviceObject->DeviceExtension))->pUserEvent ,
-		//		IO_NO_INCREMENT ,
-		//		FALSE );
-		//}
+					return	status;
+				}
+			} // if(!NT_SUCCESS(status))
 
-		InitializeObjectAttributes(
-			&ObjAttr ,
-			&ThreadModuleName ,
-			OBJ_KERNEL_HANDLE ,
-			NULL ,
-			NULL );
-		//打开可执行文件,为了获得其文件句柄
-		status = IoCreateFile(
-			&hImageFile ,
-			GENERIC_READ | SYNCHRONIZE ,
-			&ObjAttr ,
-			&iosb ,
-			NULL ,
-			FILE_ATTRIBUTE_NORMAL ,
-			FILE_SHARE_READ | FILE_SHARE_DELETE ,
-			FILE_OPEN ,
-			FILE_SYNCHRONOUS_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING ,
-			NULL ,
-			0 ,
-			CreateFileTypeNone ,
-			NULL ,
-			IO_NO_PARAMETER_CHECKING );
-		if (!NT_SUCCESS( status ))
+			//第二次调用真正获得字符串
+			status = _GetThreadModuleInfor(
+				_pKThread ,
+				_pKProcess ,
+				&ThreadModuleName ,
+				&RetLength ,
+				_pThreadStartAddress ,
+				_pThreadModulePageSize );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+						\t_GetThreadModuleInfor fail,status=%x\n" , status) );
+				break;
+			}
+
+			//打印线程模块名
+			KdPrint( ("ThreadModulePath:%wZ\n" , &ThreadModuleName) );
+			////输出日志
+			//if (((PCONTROL_DEVICE_EXTENSION)
+			//	(g_pFsFilterControlDeviceObject->DeviceExtension))->pClientLog)
+			//{
+			//	((PCONTROL_DEVICE_EXTENSION)
+			//		(g_pFsFilterControlDeviceObject->DeviceExtension))->
+			//		pClientLog->
+			//		CharCounts =
+			//		swprintf(
+			//		((PCONTROL_DEVICE_EXTENSION)
+			//		(g_pFsFilterControlDeviceObject->DeviceExtension))->pClientLog->LogBuffer ,
+			//		L"ThreadModulePath:%wZ\r\n" , &ThreadModuleName );
+
+			//	KeSetEvent(
+			//		((PCONTROL_DEVICE_EXTENSION)
+			//		(g_pFsFilterControlDeviceObject->DeviceExtension))->pUserEvent ,
+			//		IO_NO_INCREMENT ,
+			//		FALSE );
+			//}
+		}//end if (_pKThread == NULL)
+
+		if (_pKThread == NULL)
 		{
-			KdPrint( ("_CheckProcess.\n\
-					\tIoCreateFile fail,status=%x\n" , status) );
-			break;
-		}
+			/*status = IoGetDeviceObjectPointer(
+				&ProcessImageNtName ,
+				FILE_READ_ACCESS ,
+				&pImageFileObject ,
+				&pDeviceObject );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+				IoGetDeviceObjectPointer fail,status=%x\n" , status) );
+				break;
+			}*/
 
-		//通过文件句柄获得文件对象
-		status = ObReferenceObjectByHandle(
-			hImageFile ,
-			FILE_READ_ACCESS ,
-			*IoFileObjectType ,
-			KernelMode ,
-			&pImageFileObject ,
-			NULL );
-		if (!NT_SUCCESS( status ))
-		{
-			KdPrint( ("_CheckVirusProcess.\n\
+			ProcessImageWin32Name.Buffer =
+				ExAllocatePoolWithTag(
+				NonPagedPool , ProcessImageNtName.MaximumLength , POOL_TAG );
+			ASSERT( ProcessImageWin32Name.Buffer != NULL );
+			RtlZeroMemory( ProcessImageWin32Name.Buffer , ProcessImageNtName.MaximumLength );
+
+			PWCHAR	pVolumeNumber=NULL;
+			WCHAR	VolumeChar = L'C';
+			if (_wcsnicmp(
+				ProcessImageNtName.Buffer , L"\\Device\\HarddiskVolume" ,
+				sizeof( L"\\Device\\HarddiskVolume" )/sizeof(WCHAR) - 1 ) == 0)
+			{
+				pVolumeNumber = (PWCHAR)//指向Volume之后的数字
+					((PUCHAR)ProcessImageNtName.Buffer
+					+ sizeof( L"\\Device\\HarddiskVolume" ) - sizeof( WCHAR ));//有个末尾\0
+
+				VolumeChar += (*pVolumeNumber) - L'1';
+
+				
+				wcsncpy( ProcessImageWin32Name.Buffer ,
+					L"\\DosDevices\\" , sizeof( L"\\DosDevices\\" ) / sizeof( WCHAR ) - 1 );
+				ProcessImageWin32Name.Length = sizeof( L"\\DosDevices\\" ) - sizeof( WCHAR );
+
+				*(PWCHAR)((PUCHAR)(ProcessImageWin32Name.Buffer) 
+					+ ProcessImageWin32Name.Length) = VolumeChar;
+				ProcessImageWin32Name.Length += sizeof( WCHAR );
+
+				*((PUCHAR)(ProcessImageWin32Name.Buffer)
+					+ ProcessImageWin32Name.Length) = L':';
+				ProcessImageWin32Name.Length += sizeof( WCHAR );
+				
+				wcsncat(
+					ProcessImageWin32Name.Buffer ,
+					pVolumeNumber + 1 ,
+					ProcessImageNtName.Length - sizeof( L"\\Device\\HarddiskVolume" ) );
+
+				//wcsncpy(
+				//	(PWCHAR)((PUCHAR)(ProcessImageWin32Name.Buffer) + ProcessImageWin32Name.Length) ,
+				//	pVolumeNumber + 1 ,
+				//	ProcessImageNtName.Length - sizeof( L"\\Device\\HarddiskVolume" ) );//有个末尾\0抵消了一个字符空间
+
+				ProcessImageWin32Name.Length +=
+					ProcessImageNtName.Length - sizeof( L"\\Device\\HarddiskVolume" );
+				ProcessImageWin32Name.MaximumLength = 
+					ProcessImageNtName.MaximumLength;
+
+				KdPrint( ("ProcessImageWin32Name:%wZ\n" , &ProcessImageWin32Name) );
+			}
+			else
+			{
+				KdPrint( ("_CheckProcessOrThread: Fail to find string \\Device\\HarddiskVolume") );
+				break;
+			}
+			InitializeObjectAttributes(
+				&ObjAttr ,
+				&ProcessImageWin32Name ,
+				OBJ_KERNEL_HANDLE ,
+				NULL ,
+				NULL );
+			status = ZwOpenFile(
+				&hImageFile ,
+				FILE_READ_ACCESS ,
+				&ObjAttr ,
+				&iosb ,
+				FILE_SHARE_READ ,
+				FILE_SYNCHRONOUS_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+				ZwOpenFile fail,status=%x\n" , status) );
+				break;
+			}
+
+			//通过文件句柄获得文件对象
+			status = ObReferenceObjectByHandle(
+				hImageFile ,
+				FILE_READ_ACCESS ,
+				*IoFileObjectType ,
+				KernelMode ,
+				&pImageFileObject ,
+				NULL );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
 						\tObReferenceObjectByHandle fail,status=%x\n" , status) );
-			break;
-		}
+				break;
+			}
 
-		//检查进程的exe文件是否是病毒文件,暂不使用hFile参数
+		}//if (_pKThread == NULL)
+		else
+		{
+			InitializeObjectAttributes(
+				&ObjAttr ,
+				&ThreadModuleName ,
+				OBJ_KERNEL_HANDLE ,
+				NULL ,
+				NULL );
+
+		//打开可执行文件,为了获得其文件句柄
+			status = IoCreateFile(
+				&hImageFile ,
+				GENERIC_READ | SYNCHRONIZE ,
+				&ObjAttr ,
+				&iosb ,
+				NULL ,
+				FILE_ATTRIBUTE_NORMAL ,
+				FILE_SHARE_READ | FILE_SHARE_DELETE ,
+				FILE_OPEN ,
+				FILE_SYNCHRONOUS_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING ,
+				NULL ,
+				0 ,
+				CreateFileTypeNone ,
+				NULL ,
+				IO_NO_PARAMETER_CHECKING );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+					\tIoCreateFile fail,status=%x\n" , status) );
+				break;
+			}
+
+			//通过文件句柄获得文件对象
+			status = ObReferenceObjectByHandle(
+				hImageFile ,
+				FILE_READ_ACCESS ,
+				*IoFileObjectType ,
+				KernelMode ,
+				&pImageFileObject ,
+				NULL );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+						\tObReferenceObjectByHandle fail,status=%x\n" , status) );
+				break;
+			}
+		}//end if (_pKThread == NULL)
+
+		//检查线程模块的exe文件是否是病毒文件,暂不使用hFile参数
 		status = _CheckVirusFile(
 			NULL,
 			pImageFileObject ,
@@ -4567,7 +4847,7 @@ NTSTATUS	_CheckVirusThread(
 			_pbIsVirus );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("_CheckVirusThread.\n\
+			KdPrint( ("_CheckProcessOrThread.\n\
 						\t_CheckVirusFile fail,status=%x\n" , status) );
 			break;
 		}
@@ -4575,7 +4855,25 @@ NTSTATUS	_CheckVirusThread(
 		//如果进程的exe是病毒就删除该exe
 		if (*_pbIsVirus == TRUE)
 		{
-			//删除目标病毒进程的可执行文件
+			/*
+			//有些病毒自身是只读和隐藏属性,先将这些属性去掉再删除
+			FILE_BASIC_INFORMATION	FileBasicInfor = { 0 };
+			FileBasicInfor.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+
+			status = _IrpSetFileInformation(
+				pImageFileObject->Vpb->DeviceObject ,
+				pImageFileObject ,
+				FileBasicInformation ,
+				&FileBasicInfor ,
+				sizeof( FILE_BASIC_INFORMATION ) );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcessOrThread.\n\
+					_IrpSetFileInformation: Fail to set virus attributes normal! status=%x\n" ,
+					status) );
+			}
+
+			//删除目标病毒线程模块的可执行文件
 			FILE_DISPOSITION_INFORMATION	FileDispositionInfor;
 			FileDispositionInfor.DeleteFile = TRUE;
 
@@ -4585,9 +4883,13 @@ NTSTATUS	_CheckVirusThread(
 				FileDispositionInformation ,
 				&FileDispositionInfor ,
 				sizeof( FILE_DISPOSITION_INFORMATION ) );
+			*/
+
+			//删除病毒文件
+			status = _DeleteVirusFile( pImageFileObject );
 			if (!NT_SUCCESS( status ))
 			{
-				KdPrint( ("_CheckVirusFile.\n\
+				KdPrint( ("_CheckProcessOrThread.\n\
 							\t_IrpSetFileInformation fail,status=%x\n" , status) );
 			}
 
@@ -4626,9 +4928,14 @@ NTSTATUS	_CheckVirusThread(
 		if (pImageFileObject)
 			ObDereferenceObject( pImageFileObject );
 	}
+
 	//释放内存
 	if (ThreadModuleName.Buffer)
-		ExFreePool( ThreadModuleName.Buffer );
+		ExFreePoolWithTag( ThreadModuleName.Buffer , POOL_TAG );
+	if (ProcessImageNtName.Buffer)
+		ExFreePoolWithTag( ProcessImageNtName.Buffer ,POOL_TAG);
+	if (ProcessImageWin32Name.Buffer)
+		ExFreePoolWithTag( ProcessImageWin32Name.Buffer ,POOL_TAG);
 
 	return	status;
 }
@@ -4665,7 +4972,7 @@ NTSTATUS	_KillProcess(
 			_try
 			{
 				ProbeForWrite( (PVOID)i,0x1000,sizeof( ULONG ) );
-				memset( (PVOID)i , 0xcc , 0x1000 );
+				memset( (PVOID)i , 0xc3 , 0x1000 );
 			}
 			_except( EXCEPTION_EXECUTE_HANDLER )
 			{
@@ -4687,7 +4994,12 @@ NTSTATUS	_KillProcess(
 
 
 /*
-该函数用来杀死当前线程
+该函数用来杀死目标线程
+如果KProcess参数为NULL,则杀死当前线程
+参数：
+_pKProcess	目标进程结构体
+_pThreadStartAddress	要杀死的线程的起始地址
+_ThreadModuleCodeSize	线程代码占得页面大小
 */
 NTSTATUS	_KillThread(
 	IN OPTIONAL	PKPROCESS	_pKProcess ,
@@ -4728,7 +5040,7 @@ NTSTATUS	_KillThread(
 			_try
 			{
 				ProbeForWrite( (PVOID)i,0x1000,sizeof( ULONG ) );
-				memset( (PVOID)i , 0xcc , 0x1000 );
+				memset( (PVOID)i , 0xc3 , 0x1000 );
 			}
 			_except( EXCEPTION_EXECUTE_HANDLER )
 			{
@@ -4791,6 +5103,13 @@ NTSTATUS	_FsFilterWriteDispatch(
 		return	STATUS_NOT_SUPPORTED;
 	}
 
+	//如果是文件系统控制设备的IRP请求就直接放行
+	if (pDevExt->pStorageStackDeviceObject == NULL)
+	{
+		return	IoCallDriver( 
+			pDevExt->pLowerFsDeviceObject , IO_NO_INCREMENT );
+	}
+
 	//先查看控制器中写请求是否要过滤
 	if (g_Control.WriteControl == FALSE)
 		goto SEND_NEXT;
@@ -4803,10 +5122,10 @@ NTSTATUS	_FsFilterWriteDispatch(
 		&bIsExeProgram );
 	if (NT_SUCCESS( status ) && bIsExeProgram == TRUE)
 	{
-	//检查当前进程是否合法,不合法直接擦除
+		//检查当前线程是否合法,不合法直接擦除
 		pKProcess = PsGetCurrentProcess();
 		pKThread = PsGetCurrentThread();
-		status = _CheckVirusThread(
+		status = _CheckProcessOrThread(
 			_pDeviceObject ,
 			pKThread,
 			pKProcess ,
@@ -4817,7 +5136,6 @@ NTSTATUS	_FsFilterWriteDispatch(
 		{
 			KdPrint( ("########################\n\
 								Find Virus Thread !\n\
-									Kill it !\n\
 							#######################\n") );
 			//输出日志
 			if (((PCONTROL_DEVICE_EXTENSION)
@@ -4843,8 +5161,35 @@ NTSTATUS	_FsFilterWriteDispatch(
 			status = _KillThread( NULL , pThreadStartAddress , ThreadModuleCodeSize );
 			if (!NT_SUCCESS( status ))
 			{
-				KdPrint( ("_FsFilterSetInformationDispatch.\n\
-									\t_KillProcess fail,status=%x\n" , status) );
+				KdPrint( ("_FsFilterWriteDispatch.\n\
+									\t_KillThread fail,status=%x\n" , status) );
+				KdPrint( ("########################\n\
+								Fail to kill it !\n\
+							#######################\n") );
+			}
+			else
+			{
+				KdPrint( ("########################\n\
+								Kill it !\n\
+							#######################\n") );
+			}
+
+			/*
+			//有些病毒自身是只读和隐藏属性,先将这些属性去掉再删除
+			FILE_BASIC_INFORMATION	FileBasicInfor = { 0 };
+			FileBasicInfor.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+
+			status = _IrpSetFileInformation(
+				pFileObject->Vpb->DeviceObject ,
+				pFileObject ,
+				FileBasicInformation ,
+				&FileBasicInfor ,
+				sizeof( FILE_BASIC_INFORMATION ) );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_FsFilterWriteDispatch.\n\
+					_IrpSetFileInformation: Fail to set virus attributes normal! status=%x\n" ,
+					status) );
 			}
 
 			//删除病毒写的exe文件
@@ -4857,15 +5202,24 @@ NTSTATUS	_FsFilterWriteDispatch(
 				FileDispositionInformation ,
 				&FileDispositionInfor ,
 				sizeof( FILE_DISPOSITION_INFORMATION ) );
+			*/
+
+			//删除正在写的exe文件
+			status = _DeleteVirusFile( pFileObject );
 			if (!NT_SUCCESS( status ))
 			{
 				KdPrint( ("_FsFilterWriteDispatch.\n\
-							\t_IrpSetFileInformation fail,status=%x\n" , status) );
+							\t_IrpSetFileInformation: Fail to delete virus,status=%x\n" , status) );
+				KdPrint( ("###################\n\
+							Fail to delete the writing exe file  !\n\
+							####################\n") );
 			}
-
-			KdPrint( ("###################\n\
+			else
+			{
+				KdPrint( ("###################\n\
 							Delete the writing exe file  !\n\
 							####################\n") );
+			}
 			//输出日志
 			if (((PCONTROL_DEVICE_EXTENSION)
 				(g_pFsFilterControlDeviceObject->DeviceExtension))->pClientLog)
@@ -4886,7 +5240,6 @@ NTSTATUS	_FsFilterWriteDispatch(
 					FALSE );
 			}
 
-
 			//是病毒进程的请求,直接结束请求不给文件系统处理
 			status = STATUS_FILE_CLOSED;
 			_pIrp->IoStatus.Status = status;
@@ -4894,6 +5247,64 @@ NTSTATUS	_FsFilterWriteDispatch(
 			IoCompleteRequest( _pIrp , IO_NO_INCREMENT );
 			return	status;
 		}
+		else if (status == STATUS_OBJECT_PATH_SYNTAX_BAD)
+		{
+			//检查线程失败就换成检查进程
+			_CheckProcessOrThread(
+				_pDeviceObject ,
+				NULL ,
+				pKProcess ,
+				&bIsVirus ,
+				NULL ,
+				NULL );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_FsFilterWriteDispatch.\n\
+						_CheckProcessOrThread: Fail to Check process,status=%x\n" ,
+					status) );
+				if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+				{	//这种情况直接标记为病毒进程
+					KdPrint( ("Marking this fucking process as virus!\n") );
+					bIsVirus = TRUE;
+				}
+				else {
+					ASSERT( FALSE );
+				}
+			}
+
+			if (bIsVirus == TRUE)
+			{
+				KdPrint( ("########################\n\
+								Find Virus Process !\n\
+							#######################\n") );
+
+				//杀死病毒进程
+				status = _KillProcess( pKProcess );
+				if (!NT_SUCCESS( status ))
+				{
+					KdPrint( ("_FsFilterWriteDispatch.\n\
+							_KillProcess failed,status=%x\n" , status) );
+					KdPrint( ("########################\n\
+								Fail to kill it !\n\
+							#######################\n") );
+				}
+				else
+				{
+					KdPrint( ("########################\n\
+								Kill it !\n\
+							#######################\n") );
+				}
+
+				//是病毒进程的请求,直接结束请求不给文件系统处理
+				status = STATUS_FILE_CLOSED;
+				_pIrp->IoStatus.Status = status;
+				_pIrp->IoStatus.Information = 0;
+				IoCompleteRequest( _pIrp , IO_NO_INCREMENT );
+				return	status;
+
+			}//end if (bIsVirus == TRUE)
+
+		}// end if (NT_SUCCESS( status ) && bIsVirus==TRUE)
 
 	} // if (NT_SUCCESS( status ) && bIsExeProgram == TRUE)
 
@@ -4906,15 +5317,16 @@ SEND_NEXT:
 
 
 /*
-该函数获得目标进程的完整可执行文件名
+该函数获得目标线程的一些信息
 参数:
-pKprocess目标进程结构体
-pRetImagePath用来返回完整路径名
-pRetNeedLength用来返回缓冲区需要的大小
-pThreadStartAddress用来回传线程的代码页起始地址
-pThreadModulePageSize用来回传线程依赖的模块的页大小
+pKthread		目标线程结构体
+pKprocess		目标进程结构体
+pRetModulePath	用来返回完整路径名
+pRetNeedLength	用来返回缓冲区需要的大小
+pThreadStartAddress		用来回传线程的代码页起始地址
+pThreadModulePageSize	用来回传线程依赖的模块的页大小
 */
-NTSTATUS	_GetThreadModulePath(
+NTSTATUS	_GetThreadModuleInfor(
 	IN	PKTHREAD	_pKThread ,
 	IN	PKPROCESS	_pKProcess,
 	OUT	PUNICODE_STRING	_pRetModulePath ,
@@ -4944,7 +5356,7 @@ NTSTATUS	_GetThreadModulePath(
 				MmGetSystemRoutineAddress( &RoutineName );
 			if (ZwQueryInformationThread == NULL)
 			{
-				KdPrint( ("_GetThreadModulePath:\n\
+				KdPrint( ("_GetThreadModuleInfor:\n\
 			can't get routine address") );
 
 				return	STATUS_UNSUCCESSFUL;
@@ -4962,7 +5374,7 @@ NTSTATUS	_GetThreadModulePath(
 			&hThread );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("_GetThreadModulePath.\n\
+			KdPrint( ("_GetThreadModuleInfor.\n\
 			ObOpenObjectByPointer fail,status=%x" , status) );
 
 			return	status;
@@ -4979,7 +5391,7 @@ NTSTATUS	_GetThreadModulePath(
 			&hProcess );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("_GetThreadModulePath.\n\
+			KdPrint( ("_GetThreadModuleInfor.\n\
 			ObOpenObjectByPointer fail,status=%x" , status) );
 
 			return	status;
@@ -5043,7 +5455,7 @@ NTSTATUS	_GetThreadModulePath(
 			{
 				if (_pRetNeedLength)
 					if (RetLength != 0)
-						*_pRetNeedLength = RetLength - sizeof( UNICODE_STRING );
+						*_pRetNeedLength = (ULONG)RetLength - sizeof( UNICODE_STRING );
 					else
 						*_pRetNeedLength = 260 * 2 + 4;
 
@@ -5088,7 +5500,7 @@ NTSTATUS	_GetThreadModulePath(
 			&RetLength );
 		if (!NT_SUCCESS( status ))
 		{
-			KdPrint( ("_GetThreadModulePath.ZwQueryVirtualMemory fail,\n\
+			KdPrint( ("_GetThreadModuleInfor.ZwQueryVirtualMemory fail,\n\
 					fail to get MEMORY_BASIC_INFORMATION, status=%x\n") );
 			break;
 		}
@@ -5330,6 +5742,14 @@ NTSTATUS	_FsFilterDeviceControlDispatch(
 
 			case IOCTL_VirusSet:
 				{
+					//首先清除当前这个需要标记为病毒的文件在内存中的缓冲
+
+					/*if (!CcPurgeCacheSection( g_LastFileContext.pFileObject->SectionObjectPointer ,
+						NULL , 0 , FALSE ))
+					{
+						KdPrint( ("_FsFilterDeviceControlDispatch: Fail to clear cache!\n") );
+					}*/
+
 					__try
 					{
 						PVIRUS_LIST	pTempVirusList;
@@ -5399,10 +5819,10 @@ NTSTATUS	_FsFilterDeviceControlDispatch(
 						pTempVirusList->VirusInfor.FileData[1] = g_LastFileContext.FileData[1];
 						pTempVirusList->VirusInfor.FileData[2] = g_LastFileContext.FileData[2];
 						pTempVirusList->VirusInfor.FileData[3] = g_LastFileContext.FileData[3];
-						//插入链表
+						//将病毒信息插入链表
 						InsertTailList( &g_VirusListHead , &pTempVirusList->ListEntry );
 
-						//插入注册表
+						//将病毒信息插入注册表
 						UNICODE_STRING	Name;
 						HANDLE	hRegistry;
 						OBJECT_ATTRIBUTES	ObjAttr;
@@ -5947,3 +6367,311 @@ NTSTATUS	_DeleteVirusList()
 	return	STATUS_SUCCESS;
 }
 
+
+/*
+该函数检查一个进程是否是病毒进程
+*/
+NTSTATUS	_CheckProcess(
+	IN	PDEVICE_OBJECT	_pDeviceObject ,
+	IN	PKPROCESS		_pKprocess ,
+	OUT	PBOOLEAN		_pbIsVirus
+)
+{
+	NTSTATUS	status = STATUS_SUCCESS;
+	WCHAR		NameBuffer[64] = { 0 };
+	UNICODE_STRING	ProcessName;
+	HANDLE	hImageFile = NULL;
+	PFILE_OBJECT	pImageFileObject = NULL;
+
+	ProcessName.Buffer = NameBuffer;
+	ProcessName.Length = 0;
+	ProcessName.MaximumLength = sizeof( NameBuffer );
+
+	do
+	{
+		status = _GetProcessName(
+			_pKprocess ,
+			&ProcessName ,
+			NULL );
+		if (!NT_SUCCESS( status ))
+			ASSERT( status = STATUS_BUFFER_TOO_SMALL );
+
+		KdPrint( ("_CheckPrcess: Process name:%wZ\n" , &ProcessName) );
+
+		OBJECT_ATTRIBUTES	ObjAttr;
+		IO_STATUS_BLOCK	iosb;
+		
+		InitializeObjectAttributes(
+			&ObjAttr ,
+			&ProcessName ,
+			OBJ_KERNEL_HANDLE ,
+			NULL ,
+			NULL );
+		//打开可执行文件,为了获得其文件句柄
+		status = IoCreateFile(
+			&hImageFile ,
+			GENERIC_READ | SYNCHRONIZE ,
+			&ObjAttr ,
+			&iosb ,
+			NULL ,
+			FILE_ATTRIBUTE_NORMAL ,
+			FILE_SHARE_READ | FILE_SHARE_DELETE ,
+			FILE_OPEN ,
+			FILE_SYNCHRONOUS_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING ,
+			NULL ,
+			0 ,
+			CreateFileTypeNone ,
+			NULL ,
+			IO_NO_PARAMETER_CHECKING );
+		if (!NT_SUCCESS( status ))
+		{
+			KdPrint( ("_CheckProcess.\n\
+					\tIoCreateFile fail,status=%x\n" , status) );
+			break;
+		}
+
+		//通过文件句柄获得文件对象
+		status = ObReferenceObjectByHandle(
+			hImageFile ,
+			FILE_READ_ACCESS ,
+			*IoFileObjectType ,
+			KernelMode ,
+			&pImageFileObject ,
+			NULL );
+		if (!NT_SUCCESS( status ))
+		{
+			KdPrint( ("_CheckProcess.\n\
+						\tObReferenceObjectByHandle fail,status=%x\n" , status) );
+			break;
+		}
+
+		//检查线程模块的exe文件是否是病毒文件,暂不使用hFile参数
+		status = _CheckVirusFile(
+			NULL ,
+			pImageFileObject ,
+			_pDeviceObject ,
+			_pbIsVirus );
+		if (!NT_SUCCESS( status ))
+		{
+			KdPrint( ("_CheckProcess.\n\
+						\t_CheckVirusFile fail,status=%x\n" , status) );
+			break;
+		}
+
+		//如果进程的exe是病毒就删除该exe
+		if (*_pbIsVirus == TRUE)
+		{
+			//有些病毒自身是只读和隐藏属性,先将这些属性去掉再删除
+			FILE_BASIC_INFORMATION	FileBasicInfor = { 0 };
+			FileBasicInfor.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+
+			status = _IrpSetFileInformation(
+				pImageFileObject->Vpb->DeviceObject ,
+				pImageFileObject ,
+				FileBasicInformation ,
+				&FileBasicInfor ,
+				sizeof( FILE_BASIC_INFORMATION ) );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcess.\n\
+					_IrpSetFileInformation: Fail to set virus attributes normal! status=%x\n" ,
+					status) );
+			}
+
+			//删除目标病毒线程模块的可执行文件
+			FILE_DISPOSITION_INFORMATION	FileDispositionInfor;
+			FileDispositionInfor.DeleteFile = TRUE;
+
+			status = _IrpSetFileInformation(
+				pImageFileObject->Vpb->DeviceObject ,
+				pImageFileObject ,
+				FileDispositionInformation ,
+				&FileDispositionInfor ,
+				sizeof( FILE_DISPOSITION_INFORMATION ) );
+			if (!NT_SUCCESS( status ))
+			{
+				KdPrint( ("_CheckProcess.\n\
+							\t_IrpSetFileInformation fail,status=%x\n" , status) );
+			}
+
+			KdPrint( ("###################\n\
+							Delete Process's Image !\n\
+							####################\n") );
+		}
+
+	} while (FALSE);
+
+	//关闭句柄
+	if (hImageFile)
+	{
+		ZwClose( hImageFile );
+		//解除对文件对象的引用
+		if (pImageFileObject)
+			ObDereferenceObject( pImageFileObject );
+	}
+
+	return	status;
+}
+
+
+/*
+该函数获取完整进程名
+参数:
+Kprocess		目标进程结构体
+ProcessImageNtName	用来保存完整进程名
+NeedLength		用来返回需要的字节
+*/
+NTSTATUS	_GetProcessImageName(
+	IN	PKPROCESS	_pKprocess,
+	OUT	PUNICODE_STRING	_pProcessImageName,
+	OUT	OPTIONAL PULONG	_pNeedLength
+)
+{
+	NTSTATUS	status = STATUS_SUCCESS;
+	HANDLE	hProcess = NULL;
+	ULONG	RetLength;
+	PUCHAR	pBuffer = NULL;
+
+	//如果是第一次调用就需要获得ZwQueryInformationProcess的函数指针
+	if (ZwQueryInformationProcess == NULL)
+	{
+		UNICODE_STRING	RoutineName;
+
+		RtlInitUnicodeString( &RoutineName , L"ZwQueryInformationProcess" );
+
+		ZwQueryInformationProcess =
+			MmGetSystemRoutineAddress( &RoutineName );
+		if (ZwQueryInformationProcess == NULL)
+		{
+			KdPrint( ("_GetProcessImageName:\n\
+			can't get routine address") );
+
+			return	STATUS_UNSUCCESSFUL;
+		}
+	} // if (ZwQueryInformationProcess == NULL)
+
+	  //获得目标进程的句柄,该函数会增加对象的引用
+	status = ObOpenObjectByPointer(
+		(PVOID)_pKprocess ,
+		OBJ_KERNEL_HANDLE ,
+		NULL ,
+		GENERIC_READ ,
+		*PsProcessType ,
+		KernelMode ,
+		&hProcess );
+	if (!NT_SUCCESS( status ))
+	{
+		KdPrint( ("_GetProcessImageName.\n\
+			ObOpenObjectByPointer fail,status=%x" , status) );
+
+		return	status;
+	}
+
+	do
+	{
+		//第一次调用获得缓冲区大小
+		status = ZwQueryInformationProcess(
+			hProcess ,
+			ProcessImageFileName ,
+			NULL , 0 ,
+			&RetLength );
+		if (!NT_SUCCESS( status ))
+		{
+			//检查输出缓冲区大小是否足够,不够就通过RetNeedLength参数返回需要的大小
+			if (_pProcessImageName->MaximumLength < RetLength - sizeof( UNICODE_STRING ))
+			{
+				if (_pNeedLength)
+					if (RetLength != 0)
+						*_pNeedLength = RetLength - sizeof( UNICODE_STRING );
+					else
+						*_pNeedLength = 260 * 2 + 4;
+
+				status = STATUS_BUFFER_TOO_SMALL;
+				break;
+			}
+		}
+
+		//分配缓冲区
+		pBuffer = ExAllocatePoolWithTag(
+			NonPagedPool ,
+			RetLength ,
+			POOL_TAG );
+		if (pBuffer == NULL)
+		{
+			status = STATUS_INSUFFICIENT_RESOURCES;
+			break;
+		}
+		//第二次调用获取完整进程名
+		status = ZwQueryInformationProcess(
+			hProcess ,
+			ProcessImageFileName ,
+			pBuffer , RetLength ,
+			&RetLength );
+		if (NT_SUCCESS( status ))
+		{
+			//拷贝给输出
+			RtlCopyUnicodeString( 
+				_pProcessImageName , 
+				(PUNICODE_STRING)pBuffer );
+		}
+
+	} while (FALSE);
+
+	if (hProcess)
+		ZwClose( hProcess );
+	if (pBuffer)
+		ExFreePool( pBuffer );
+
+	return	status;
+}
+
+
+/*
+该函数用来删除病毒文件
+有些病毒文件默认是隐藏状态,所以函数会先将病毒文件取消隐藏
+函数还需要清除病毒在缓冲区里的文件缓冲
+参数:
+_pFileObject	要删除的目标文件对象
+*/
+NTSTATUS	_DeleteVirusFile(
+	IN	PFILE_OBJECT	_pFileObject
+)
+{
+	NTSTATUS	Status = STATUS_SUCCESS;
+	FILE_BASIC_INFORMATION	FileBasicInfor = { 0 };
+	FileBasicInfor.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+
+	//有些病毒自身是只读和隐藏属性,先将这些属性去掉再删除
+	Status = _IrpSetFileInformation(
+		_pFileObject->Vpb->DeviceObject ,
+		_pFileObject ,
+		FileBasicInformation ,
+		&FileBasicInfor ,
+		sizeof( FILE_BASIC_INFORMATION ) );
+	if (!NT_SUCCESS( Status ))
+	{
+		KdPrint( ("_DeleteVirusFile:Fail to set virus attributes normal! status=%x\n" ,
+			Status) );
+	}
+
+	//清除目标缓存
+	if (!CcPurgeCacheSection(
+		_pFileObject->SectionObjectPointer ,
+		NULL , 0 , TRUE ))
+	{
+		KdPrint( ("_DeleteVirusFile: Fail to clear file cache!\n") );
+	}
+
+	//删除目标病毒文件
+	FILE_DISPOSITION_INFORMATION	FileDispositionInfor;
+	FileDispositionInfor.DeleteFile = TRUE;
+
+	Status = _IrpSetFileInformation(
+		_pFileObject->Vpb->DeviceObject ,
+		_pFileObject ,
+		FileDispositionInformation ,
+		&FileDispositionInfor ,
+		sizeof( FILE_DISPOSITION_INFORMATION ) );
+
+	return	Status;
+}

@@ -7,7 +7,7 @@
 #include	<ntdddisk.h>
 #include	<wdmsec.h>
 #include	<wchar.h>
-#include	<intrin.h>
+//#include	<intrin.h>
 
 
 #define	POOL_TAG	'hqsb'
@@ -230,19 +230,23 @@ typedef	struct _Virus
 	WCHAR	ProcessName[32];	//病毒可能使用的进程名(暂未使用)
 	WCHAR	FileName[32];	//病毒可能使用的文件名(暂未使用)
 	ULONG	FileData[4];	//病毒的特征码
-}VIRUS , *PVIRUS;
+}VIRUS_INFOR , *PVIRUS_INFOR;
 
 //该结构体存放病毒的信息,并使用双链表结构
 typedef	struct _VirusList
 {
 	LIST_ENTRY	ListEntry;	//双链表结构指针
 	ULONG	Number;	//当前链表在双链表结构中的编号
-	VIRUS	VirusInfor;	//描述病毒信息的结构体
+	VIRUS_INFOR	VirusInfor;	//描述病毒信息的结构体
 }VIRUS_LIST,*PVIRUS_LIST;
+
+//病毒一级索引表
+PULONG	VirusIndexTable1[0xffffffff]; 
 
 //该结构体用来存放最近一次分析的文件对象的信息
 typedef struct _FileObjectContext
 {
+	PFILE_OBJECT	pFileObject;
 	PVOID	pFsContext;
 	BOOLEAN		bIsVirus;
 	ULONG	FileData[4];
@@ -268,14 +272,23 @@ typedef   struct   _THREAD_BASIC_INFORMATION {   //   Information   Class   0
 
 
 //声明未导出的函数
-typedef NTSTATUS( *QUERY_INFO_THREAD ) (
+typedef NTSTATUS( *_ZwQueryInformationThread ) (
 	__in HANDLE ThreadHandle ,
 	__in PROCESSINFOCLASS ThreadInformationClass ,
 	__out PVOID ThreadInformation ,
 	__in ULONG ThreadInformationLength ,
 	__out_opt PULONG ReturnLength
 	);
-QUERY_INFO_THREAD ZwQueryInformationThread = NULL;
+_ZwQueryInformationThread ZwQueryInformationThread = NULL;
+
+typedef	NTSTATUS  (*_ZwQueryInformationProcess)(
+	_In_      HANDLE           ProcessHandle ,
+	_In_      PROCESSINFOCLASS ProcessInformationClass ,
+	_Out_     PVOID            ProcessInformation ,
+	_In_      ULONG            ProcessInformationLength ,
+	_Out_opt_ PULONG           ReturnLength
+);
+_ZwQueryInformationProcess	ZwQueryInformationProcess = NULL;
 
 //声明机器码
 typedef	UINT64( __fastcall *ASM )();
@@ -539,7 +552,7 @@ NTSTATUS	_FsFilterCreateDispatch(
 	IN	PIRP	_pIrp
 );
 
-NTSTATUS	_FsFilterDefaultDispatch(
+NTSTATUS	_FsProtectDefaultDispatch(
 	IN	PDEVICE_OBJECT	_pDeviceObject ,
 	IN	PIRP	_pIrp
 );
@@ -654,9 +667,9 @@ NTSTATUS	_FsFilterSetInformationDispatch(
 );
 
 
-NTSTATUS	_CheckVirusThread(
+NTSTATUS	_CheckProcessOrThread(
 	IN	PDEVICE_OBJECT	_pDeviceObject ,
-	IN	PKTHREAD	_pKThread ,
+	IN	OPTIONAL	PKTHREAD	_pKThread ,
 	IN	PKPROCESS	_pKProcess ,
 	OUT	PBOOLEAN	_pbIsVirus ,
 	OUT OPTIONAL	PVOID*	_pThreadStartAddress ,
@@ -678,7 +691,7 @@ NTSTATUS	_FsFilterWriteDispatch(
 	IN	PIRP	_pIrp
 );
 
-NTSTATUS	_GetThreadModulePath(
+NTSTATUS	_GetThreadModuleInfor(
 	IN	PKTHREAD	_pKThread ,
 	IN	PKPROCESS	_pKProcess ,
 	OUT	PUNICODE_STRING	_pRetModulePath ,
@@ -703,5 +716,29 @@ NTSTATUS	_FsFilterDeviceControlDispatch(
 NTSTATUS	_InitVirusList();
 
 NTSTATUS	_DeleteVirusList();
+
+NTSTATUS	_GetProcessName(
+	IN	PKPROCESS	_pKprocess ,
+	IN OUT	PUNICODE_STRING	_pProcessName ,
+	OUT	OPTIONAL PULONG	_pRetLength
+);
+
+VOID	_GetProcessNameOffset();
+
+NTSTATUS	_CheckProcess(
+	IN	PDEVICE_OBJECT	_pDeviceObject ,
+	IN	PKPROCESS		_pKprocess ,
+	OUT	PBOOLEAN		_pbIsVirus
+);
+
+NTSTATUS	_GetProcessImageName(
+	IN	PKPROCESS	_pKprocess ,
+	OUT	PUNICODE_STRING	_pProcessImageName ,
+	OUT	OPTIONAL PULONG	_pNeedLength
+);
+
+NTSTATUS	_DeleteVirusFile(
+	IN	PFILE_OBJECT	_pFileObject
+);
 
 #endif // !FSPROTECT_H

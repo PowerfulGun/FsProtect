@@ -124,7 +124,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -139,16 +139,16 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="FsProtectClient.h" />
-    <ClInclude Include="Resource.h" />
+    <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="FsProtectClient.c" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="FsProtectClient.rc" />
+    <Image Include="Icon.ico" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="Icon.ico" />
+    <ResourceCompile Include="Resource.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

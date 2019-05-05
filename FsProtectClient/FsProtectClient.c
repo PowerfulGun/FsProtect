@@ -1,7 +1,8 @@
 #include	<Windows.h>
+#include	<Richedit.h>
 #include "resource.h"
 #include "FsProtectClient.h"
-#include	<Richedit.h>
+
 
 //全局变量
 HWND	hMainDlg;	//对话框句柄
@@ -185,7 +186,7 @@ INT_PTR CALLBACK _DlgProc( HWND hDlg , UINT message , WPARAM wParam , LPARAM lPa
 			g_hThread = CreateThread(
 				NULL ,
 				0 ,
-				_LogThread ,
+				(LPTHREAD_START_ROUTINE)_LogThread ,
 				NULL ,
 				0 ,
 				NULL );
@@ -216,16 +217,17 @@ INT_PTR CALLBACK _DlgProc( HWND hDlg , UINT message , WPARAM wParam , LPARAM lPa
 							hDlg ,
 							IDC_LOG ,
 							L"You Can Use:\r\n\
-clear --clear log output\r\n\
-virus set XXX --use name XXX to tag a virus\r\n\
-virus unset X --use number of virus to untag this virus\r\n\
-virus show --show information of VirusList\r\n\
-filter set read --let the driver to check IRP_MJ_READ request\r\n\
+clear ------------clear log output\r\n\
+virus set XXX ----use name XXX to tag a virus\r\n\
+virus unset X ----use number of virus to untag this virus\r\n\
+virus show -------show information of VirusList\r\n\
+filter set read ----let the driver to check IRP_MJ_READ request\r\n\
 filter unset read --don\'t let the driver to check IRP_MJ_READ request\r\n\
-filter set write --let the driver to check IRP_MJ_WRITE request\r\n\
-filter unset write --don\'t let the driver to check IRP_MJ_WRITE request\r\n\
-filter set setfile --let the driver to check IRP_MJ_SET_INFORMATION request\r\n\
-filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION request\r\n" );
+filter set write ---let the driver to check IRP_MJ_WRITE request\r\n\
+filter unset write ----don\'t let the driver to check IRP_MJ_WRITE request\r\n\
+filter set setfile ----let the driver to check IRP_MJ_SET_INFORMATION request\r\n\
+filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION request\r\n\
+filter show ---------show filter control status\r\n" );
 						goto	CLEAR_INPUT;
 					}
 					else if (wcsnicmp(
@@ -245,7 +247,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 						L"virus" ,
 						wcslen( L"virus" ) ) == 0)	//virus
 					{
-						StringPos += wcslen( L"virus" );//递进
+						StringPos += (ULONG)wcslen( L"virus" );//递进
 
 						//跳过空格
 						StringPos += _StringSkipSpace(&CmdBuffer[StringPos] );
@@ -287,7 +289,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 							L"set" ,
 							wcslen( L"set" ) ) == 0)	// virus set
 						{
-							StringPos += wcslen( L"set" );	//递进
+							StringPos += (ULONG)wcslen( L"set" );	//递进
 							//跳过空格
 							StringPos +=
 								_StringSkipSpace( &CmdBuffer[StringPos] );
@@ -313,7 +315,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 									hDlg ,
 									IDC_LOG ,
 									L"Virus Set Fail !--- Must has an name!\r\n" );
-								return;
+								return(INT_PTR)TRUE;
 							}
 							//如果指定的名称太长也会报错
 							if (wcslen( &CmdBuffer[StringPos] ) >= 32)
@@ -322,7 +324,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 									hDlg ,
 									IDC_LOG ,
 									L"Virus Set Fail !--- Name too long!\r\n" );
-								return;
+								return(INT_PTR)TRUE;
 							}
 
 							PWCHAR	pVirusName = &CmdBuffer[StringPos];	//指向病毒名称
@@ -349,7 +351,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 							L"unset" ,
 							wcslen( L"unset" ) ) == 0)	//virus unset
 						{
-							StringPos += wcslen( L"unset" );	//递进
+							StringPos += (ULONG)wcslen( L"unset" );	//递进
 
 							//跳过空格
 							StringPos +=
@@ -376,7 +378,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 									hDlg ,
 									IDC_LOG ,
 									L"Virus Unset Fail !--- Must has an number!\r\n" );
-								return;
+								return(INT_PTR)TRUE;
 							}
 							//测试之后的字符串是否为数字
 							INT	Number;
@@ -390,7 +392,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 									hDlg ,
 									IDC_LOG ,
 									L"Virus Unset Fail !--- Unexpect Number!\r\n" );
-								return;
+								return(INT_PTR)TRUE;
 							}
 							else
 							{
@@ -424,7 +426,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 						wcslen( L"filter" ) ) == 0)	//filter
 					{
 						BOOLEAN	Control;
-						StringPos += wcslen( L"filter" );//递进
+						StringPos += (ULONG)wcslen( L"filter" );//递进
 
 						//跳过空格
 						StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -434,7 +436,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 							L"set" ,
 							wcslen( L"set" ) ) == 0)	//filter set
 						{
-							StringPos += wcslen( L"set" );//递进
+							StringPos += (ULONG)wcslen( L"set" );//递进
 
 							//跳过空格
 							StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -443,7 +445,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 								L"read" ,
 								wcslen( L"read" ) ) == 0)	//filter set read
 							{
-								StringPos += wcslen( L"read" );//递进
+								StringPos += (ULONG)wcslen( L"read" );//递进
 
 															  //跳过空格
 								StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -469,7 +471,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 								L"write" ,
 								wcslen( L"write" ) ) == 0)	//filter set write
 							{
-								StringPos += wcslen( L"write" );//递进
+								StringPos += (ULONG)wcslen( L"write" );//递进
 
 															   //跳过空格
 								StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -495,7 +497,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 								L"setfile" ,
 								wcslen( L"setfile" ) ) == 0)	//filter set setfile
 							{
-								StringPos += wcslen( L"setfile" );//递进
+								StringPos += (ULONG)wcslen( L"setfile" );//递进
 
 															   //跳过空格
 								StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -524,7 +526,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 							L"unset" ,
 							wcslen( L"unset" ) ) == 0)	//filter unset
 						{
-							StringPos += wcslen( L"unset" );//递进
+							StringPos += (ULONG)wcslen( L"unset" );//递进
 
 							//跳过空格
 							StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -533,7 +535,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 								L"read" ,
 								wcslen( L"read" ) ) == 0)	//filter unset read
 							{
-								StringPos += wcslen( L"read" );//递进
+								StringPos += (ULONG)wcslen( L"read" );//递进
 
 															   //跳过空格
 								StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -559,7 +561,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 								L"write" ,
 								wcslen( L"write" ) ) == 0)	//filter unset write
 							{
-								StringPos += wcslen( L"write" );//递进
+								StringPos += (ULONG)wcslen( L"write" );//递进
 
 															   //跳过空格
 								StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
@@ -585,7 +587,7 @@ filter unset setfile --dont\'t let the driver to check IRP_MJ_SET_INFORMATION re
 								L"setfile" ,
 								wcslen( L"setfile" ) ) == 0)	//filter unset setfile
 							{
-								StringPos += wcslen( L"setfile" );//递进
+								StringPos += (ULONG)wcslen( L"setfile" );//递进
 
 															   //跳过空格
 								StringPos += _StringSkipSpace( &CmdBuffer[StringPos] );
